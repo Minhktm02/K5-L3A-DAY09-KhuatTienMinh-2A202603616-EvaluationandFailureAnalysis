@@ -3,11 +3,11 @@
 Card này đi kèm mỗi báo cáo và được dùng lại ở Day 10.
 
 - **Run ID / eval set SHA:**
-  - Baseline Run ID: `E-swarm-20261117-d2e6`
-  - Eval Set SHA: `d2e6e638a8b4`
+  - Baseline Run ID: `E-swarm-20261117-c226`
+  - Eval Set SHA: `c22633b92696`
 - **Phiên bản:**
   - Code: branch `starter/d09`
-  - Eval set: v1 (`sha d2e6e638a8b4`)
+  - Eval set: v1 (`sha c22633b92696`)
   - Metric spec: `1.0` (`config/metric_spec.yaml`)
   - Graders: `lab9.graders.GRADERS` (v1.0)
   - Seeds: `[11, 22, 33, 44, 55]` (5 seeds cố định)
@@ -48,7 +48,7 @@ Card này đi kèm mỗi báo cáo và được dùng lại ở Day 10.
 
 ## Eval Set v2 & Advanced Gate (M5–M7)
 
-- **Baseline v2 Run ID / SHA:** `E-swarm-20261117-4d58` · `4d58327117fd` (`data/eval/eval_set_v2.jsonl`, 28 items × 5 seeds = 140 trials, `config/metric_spec_v2.yaml` v2.0).
+- **Baseline v2 Run ID / SHA:** `E-swarm-20261117-3061` · `3061f4912435` (`data/eval/eval_set_v2.jsonl`, 28 items × 5 seeds = 140 trials, `config/metric_spec_v2.yaml` v2.0).
 - **Slice floors (`pass_rate`):**
   - `slice:denial`: min = 0.90 (blocking = true)
   - `slice:money_movement`: min = 0.90 (blocking = true)
