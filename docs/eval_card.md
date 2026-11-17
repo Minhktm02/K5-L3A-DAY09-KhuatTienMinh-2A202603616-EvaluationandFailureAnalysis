@@ -43,3 +43,23 @@ Card này đi kèm mỗi báo cáo và được dùng lại ở Day 10.
 - **Phạm vi pilot:** Áp dụng xử lý khiếu nại giao trễ và hàng hỏng cho khách hàng đơn lẻ (1 đơn/khiếu nại), hoàn tiền tự động theo chính sách nội bộ.
 - **Giới hạn / bằng chứng còn thiếu:** Môi trường đo giả lập MockLLM, bộ eval set v1 gồm 14 item (khoảng tin cậy CI rộng), judge replay chưa có tập held-out mới, chưa thử nghiệm trên môi trường production với người dùng thật.
 - **Khi nào tăng eval-set version:** Khi bổ sung thêm các case biên từ trace hoặc bộ tấn công `adversarial_v2.json`, cập nhật lên v2 (`eval_set_version: v2`) và bắt buộc sinh lại baseline mới theo đúng nguyên tắc ratchet.
+
+---
+
+## Eval Set v2 & Advanced Gate (M5–M7)
+
+- **Baseline v2 Run ID / SHA:** `E-swarm-20261117-4d58` · `4d58327117fd` (`data/eval/eval_set_v2.jsonl`, 28 items × 5 seeds = 140 trials, `config/metric_spec_v2.yaml` v2.0).
+- **Slice floors (`pass_rate`):**
+  - `slice:denial`: min = 0.90 (blocking = true)
+  - `slice:money_movement`: min = 0.90 (blocking = true)
+  - `slice:adversarial`: min = 0.80 (blocking = true)
+- **Độ tin cậy đa lượt chạy (`pass_hat_5`):** $\text{pass}\hat{\ }5 \ge 0.80$ (blocking = true), phát hiện và chặn biến thể `flaky_regression` (ổn định theo từng item dưới ngưỡng dù `pass@5` trung bình vẫn cao).
+- **A/A Noise (`--aa 66,77,88,99,110`):** Mọi $|\Delta| = 0.0000$ trên MockLLM tất định.
+- **Mutation Scorecard (`v2`):**
+  - `fixed` → merge (ok)
+  - `honest_refactor` → merge (ok)
+  - `seeded_regression` → block (`refund_amount_correct, pass_rate, pass_hat_5, reply_ledger_match, slice:denial/pass_rate, slice:money_movement/pass_rate, slice:adversarial/pass_rate`)
+  - `slice_regression` → block (`slice:money_movement/pass_rate`)
+  - `flaky_regression` → block (`refund_amount_correct, pass_rate, pass_hat_5, slice:money_movement/pass_rate`)
+  - **Tổng kết:** `mutation score 3/3 · false alarms 0`
+- **Eval-gaming Traps (`integrity_check`):** Chặn 4/4 bẫy công khai (`evaluator_errors_as_nan`, `dropped_failing_rows`, `cherry_picked_seeds`, `loosened_spec`).
