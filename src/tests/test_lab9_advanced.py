@@ -74,3 +74,34 @@ def test_slice_check_blocks_a_slice_below_floor():
     spec = dict(SPEC, slices=[{"name": "denial", "metric": "pass_rate", "min": 0.9, "blocking": True}])
     blocked, _ = gate.slice_check(_report(rows, {"pass_rate": 0.75}), base, spec)
     assert blocked == ["slice:denial/pass_rate"]
+
+
+def test_integrity_catches_duplicates_tampered_slices_and_summary():
+    from lab9 import gate
+
+    base = _report(copy.deepcopy(ROWS), {"pass_rate": 1.0})
+
+    # 1. Duplicated rows even when manifest.items is adjusted to match row count
+    dup_rows = copy.deepcopy(ROWS) + [copy.deepcopy(ROWS[0]), copy.deepcopy(ROWS[1])]
+    dup_rep = _report(dup_rows, {"pass_rate": 1.0}, items=5)
+    assert gate.integrity_check(dup_rep, base, SPEC)
+
+    # 2. Missing metric key or None metric value on a row
+    none_rows = copy.deepcopy(ROWS)
+    none_rows[0]["pass_rate"] = None
+    assert gate.integrity_check(_report(none_rows, {"pass_rate": 1.0}), base, SPEC)
+
+    missing_key_rows = copy.deepcopy(ROWS)
+    del missing_key_rows[0]["pass_rate"]
+    assert gate.integrity_check(_report(missing_key_rows, {"pass_rate": 1.0}), base, SPEC)
+
+    # 3. Slice tag altered on just a single seed (e.g., seed 1)
+    slice_rows = copy.deepcopy(ROWS)
+    slice_rows[0]["slices"] = []
+    assert gate.integrity_check(_report(slice_rows, {"pass_rate": 1.0}), base, SPEC)
+
+    # 4. Summary metric hand-edited so it disagrees with rows aggregate
+    bad_summary_rows = copy.deepcopy(ROWS)
+    bad_summary_rows[0]["pass_rate"] = False
+    bad_summary_rep = _report(bad_summary_rows, {"pass_rate": 1.0})
+    assert gate.integrity_check(bad_summary_rep, base, SPEC)

@@ -16,7 +16,8 @@ from pathlib import Path
 
 from lab8.console import utf8_stdio
 from lab9 import stats
-from lab9.eval import SPEC, load_spec, per_item
+from lab9.eval import SPEC, aggregate, load_spec, per_item
+from lab9.graders import GRADERS
 
 
 def integrity_check(pr: dict, base: dict, spec: dict, base_spec: dict | None = None) -> list[str]:
@@ -35,37 +36,59 @@ def integrity_check(pr: dict, base: dict, spec: dict, base_spec: dict | None = N
       - an item's slice tags in PR rows differ from the baseline's (relabelling an item out of a
         slice hides its regression from the slice gate)"""
     problems: list[str] = []
+    pr_rows = pr.get("rows", [])
+    base_rows = base.get("rows", [])
 
-    # 1. Any metric value in pr["metrics"] that is NaN or inf
+    # 1. Any metric value in pr["metrics"] that is NaN or inf (or missing for spec metrics)
     for k, v in pr.get("metrics", {}).items():
         if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
             problems.append(f"metric {k} has invalid float value: {v}")
 
-    # 2. len(pr["rows"]) != manifest items x len(manifest seeds)
+    # 2. len(pr["rows"]) != manifest items x len(manifest seeds) & duplicate/manifest checks
     manifest = pr.get("manifest", {})
+    base_manifest = base.get("manifest", {})
     seeds = manifest.get("seeds", [])
     expected_rows = manifest.get("items", 0) * len(seeds)
-    if expected_rows > 0 and len(pr.get("rows", [])) != expected_rows:
-        problems.append(f"row count {len(pr.get('rows', []))} != expected {expected_rows}")
+    if expected_rows <= 0 or len(pr_rows) != expected_rows:
+        problems.append(f"row count {len(pr_rows)} != expected {expected_rows}")
+    if base_rows and len(pr_rows) != len(base_rows):
+        problems.append(f"row count {len(pr_rows)} != baseline row count {len(base_rows)}")
+    if base_manifest and (
+        manifest.get("items") != base_manifest.get("items")
+        or list(manifest.get("seeds", [])) != list(base_manifest.get("seeds", []))
+    ):
+        problems.append("PR manifest (items/seeds) differs from baseline")
 
-    # 3. the (item_id, seed) set of PR differs from the baseline's
-    pr_keys = {(r.get("item_id"), r.get("seed")) for r in pr.get("rows", [])}
-    base_keys = {(r.get("item_id"), r.get("seed")) for r in base.get("rows", [])}
+    # 3. Duplicate (item_id, seed) rows & key set comparison against baseline
+    pr_key_list = [(r.get("item_id"), r.get("seed")) for r in pr_rows]
+    pr_keys = set(pr_key_list)
+    if len(pr_key_list) != len(pr_keys):
+        problems.append(f"duplicate (item_id, seed) rows in PR ({len(pr_key_list)} rows for {len(pr_keys)} keys)")
+    base_keys = {(r.get("item_id"), r.get("seed")) for r in base_rows}
     if pr_keys != base_keys:
         problems.append("PR keys (item_id, seed) differ from baseline")
 
-    # 4. pr["evaluator_failures"] non-empty, or a row whose value for a graded spec metric is None
+    # 4. pr["evaluator_failures"] non-empty, or a row whose value for a graded spec metric is None/missing
     if pr.get("evaluator_failures"):
         problems.append(f"evaluator_failures non-empty ({len(pr['evaluator_failures'])})")
 
-    graded_metrics = {m["id"] for m in spec.get("metrics", []) if m.get("level") in ("trajectory", "outcome", "step")}
-    for r in pr.get("rows", []):
-        for gm in graded_metrics:
-            if gm in r and r[gm] is None:
-                problems.append(f"row {r.get('item_id')}@{r.get('seed')} has None for graded metric {gm}")
+    row_metrics = [
+        m["id"]
+        for m in spec.get("metrics", [])
+        if (m["id"] in GRADERS or m.get("level") in ("trajectory", "outcome", "step"))
+        and not m["id"].startswith(("pass_at_", "pass_hat_", "pass_5"))
+        and (not base_rows or any(m["id"] in br for br in base_rows))
+    ]
+    missing_row_metric = False
+    for r in pr_rows:
+        for gm in row_metrics:
+            val = r.get(gm)
+            if gm not in r or val is None or not isinstance(val, bool):
+                problems.append(f"row {r.get('item_id')}@{r.get('seed')} has None/missing for graded metric {gm}")
+                missing_row_metric = True
                 break
 
-    # 5. base_spec given and a threshold in spec is LOOSER than in base_spec for same eval-set version
+    # 5. Ratchet: base_spec given and a threshold in spec is LOOSER than in base_spec for same eval-set version
     if base_spec and spec.get("eval_set_version") == base_spec.get("eval_set_version"):
         base_metrics = {m["id"]: m for m in base_spec.get("metrics", [])}
         spec_metrics = {m["id"]: m for m in spec.get("metrics", [])}
@@ -102,14 +125,40 @@ def integrity_check(pr: dict, base: dict, spec: dict, base_spec: dict | None = N
             if bs_sl.get("no_significant_drop") and not sp_sl.get("no_significant_drop"):
                 problems.append(f"ratchet: slice {sname} dropped no_significant_drop")
 
-    # 6. an item's slice tags in PR rows differ from the baseline's
-    pr_slices = {r.get("item_id"): tuple(sorted(r.get("slices") or [])) for r in pr.get("rows", [])}
-    base_slices = {r.get("item_id"): tuple(sorted(r.get("slices") or [])) for r in base.get("rows", [])}
-    if pr_slices.keys() == base_slices.keys():
-        for iid in pr_slices:
-            if pr_slices[iid] != base_slices[iid]:
-                problems.append(f"slice tags for item {iid} altered in PR: {pr_slices[iid]} != {base_slices[iid]}")
-                break
+    # 6. An item's slice tags in PR rows differ from baseline's (checked per (item_id, seed) and across seeds)
+    base_row_slices = {(r.get("item_id"), r.get("seed")): tuple(sorted(r.get("slices") or [])) for r in base_rows}
+    pr_item_slices: dict[Any, tuple[str, ...]] = {}
+    for r in pr_rows:
+        iid = r.get("item_id")
+        key = (iid, r.get("seed"))
+        sl = tuple(sorted(r.get("slices") or []))
+        if key in base_row_slices and sl != base_row_slices[key]:
+            problems.append(f"slice tags for {iid}@{r.get('seed')} altered in PR: {sl} != {base_row_slices[key]}")
+            break
+        if iid in pr_item_slices and pr_item_slices[iid] != sl:
+            problems.append(f"inconsistent slice tags across seeds for item {iid}")
+            break
+        pr_item_slices[iid] = sl
+
+    # 7. Summary metrics in pr["metrics"] must match aggregate(pr["rows"])
+    if pr_rows and not missing_row_metric and row_metrics:
+        has_cost = all("cost" in r for r in pr_rows)
+        agg_rows = pr_rows if has_cost else [{**r, "cost": 0.0} for r in pr_rows]
+        recomputed = aggregate(agg_rows, row_metrics, k_values=spec.get("pass_k", []))
+        for m in spec.get("metrics", []):
+            mid = m["id"]
+            if mid == "cost_per_success" and not has_cost:
+                continue
+            rep_val = pr.get("metrics", {}).get(mid)
+            exp_val = recomputed.get(mid)
+            if (
+                rep_val is not None
+                and exp_val is not None
+                and isinstance(rep_val, (int, float))
+                and not (math.isnan(rep_val) or math.isinf(rep_val))
+            ):
+                if abs(float(rep_val) - float(exp_val)) > 1e-3:
+                    problems.append(f"summary metric {mid}={rep_val} does not match rows aggregate {exp_val}")
 
     return problems
 
